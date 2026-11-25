@@ -56,15 +56,23 @@ This guarantees monotonically increasing `versionCode` values across releases an
 
 ## 3. Release Process
 
+You can publish a public non-draft release in either of two ways:
+
+### Option A: Push a Version Tag
 1. Ensure `main` is up to date and tested.
 2. Create and push a semantic version tag:
    ```bash
    git tag v1.0.0
    git push origin v1.0.0
    ```
-3. Monitor **Actions -> Android Build & Komi Store Release** on GitHub:
-   - The `build` job compiles the release APK, signs it via `apksigner`, and verifies the signature.
-   - The `release` job creates a **published, non-draft** GitHub Release with auto-generated release notes and attaches `tecno-clock-studio-v1.0.0-release.apk`.
+
+### Option B: One-Click Manual Release in GitHub UI
+1. Open your repository on GitHub and go to **Actions -> Android Build & Komi Store Release**.
+2. Click **Run workflow**, leave **Publish a public non-draft GitHub Release** checked, enter `v1.0.0`, and click **Run workflow**.
+
+In both cases:
+- The `build` job compiles the APK (signed release APK when `ANDROID_KEYSTORE_FILE` secrets are configured).
+- The `release` job creates a **published, non-draft** GitHub Release with auto-generated release notes and attaches the `.apk`.
 
 ---
 

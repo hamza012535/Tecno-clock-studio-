@@ -3,7 +3,7 @@ name: Android Build & Komi Store Release
 # Required GitHub Repository Secrets (see SECRETS.md for details):
 # - ANDROID_KEYSTORE_FILE      : Base64-encoded .jks / .keystore signing file
 # - ANDROID_KEYSTORE_PASSWORD  : Keystore store password
-# - ANDROID_KEY_ALIAS          : Key alias inside the keystore (e.g. "upload")
+# - ANDROID_KEY_ALIAS          : Key alias inside the keystore (use "upload")
 # - ANDROID_KEY_PASSWORD       : Key password for the alias
 
 on:
@@ -15,10 +15,16 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      release_type:
-        description: 'Build type (debug or release)'
+      publish_release:
+        description: 'Publish a public non-draft GitHub Release'
+        type: boolean
+        required: true
+        default: true
+      tag_name:
+        description: 'Version tag when publishing manually (e.g. v1.0.0)'
+        type: string
         required: false
-        default: 'release'
+        default: 'v1.0.0'
 
 permissions:
   contents: write
@@ -27,6 +33,9 @@ jobs:
   build:
     name: Build & Sign APK
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      version_name: ${{ steps.version.outputs.version_name }}
 
     steps:
       - name: Checkout repository
@@ -51,25 +60,38 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Compute versionCode and versionName from tag
+      - name: Compute versionCode and versionName
         id: version
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            TAG="${GITHUB_REF_NAME#v}"
+            RAW_TAG="${GITHUB_REF_NAME}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_release }}" == "true" ]]; then
+            RAW_TAG="${{ inputs.tag_name }}"
+            [[ "$RAW_TAG" == v* ]] || RAW_TAG="v${RAW_TAG}"
+          else
+            RAW_TAG=""
+          fi
+
+          if [[ -n "$RAW_TAG" ]]; then
+            TAG="${RAW_TAG#v}"
             IFS='.' read -r MAJOR MINOR PATCH <<< "${TAG%%-*}"
             MAJOR=${MAJOR:-1}
             MINOR=${MINOR:-0}
             PATCH=${PATCH:-0}
             VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
             VERSION_NAME="$TAG"
+            RELEASE_TAG="$RAW_TAG"
           else
             VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
             VERSION_NAME="0.0.${GITHUB_RUN_NUMBER}-snapshot"
+            RELEASE_TAG=""
           fi
+
           echo "VERSION_CODE=${VERSION_CODE}" >> "$GITHUB_ENV"
           echo "VERSION_NAME=${VERSION_NAME}" >> "$GITHUB_ENV"
           echo "version_code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
           echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Decode signing keystore from GitHub Secret
         if: ${{ secrets.ANDROID_KEYSTORE_FILE != '' }}
@@ -92,7 +114,7 @@ jobs:
             gradle assembleRelease --no-daemon
           fi
 
-      - name: Build Debug APK (Snapshot / PR / Missing Keystore Fallback)
+      - name: Build Debug APK (Snapshot / Missing Keystore Fallback)
         if: ${{ secrets.ANDROID_KEYSTORE_FILE == '' }}
         run: |
           if [ -f "./gradlew" ]; then
@@ -124,7 +146,7 @@ jobs:
           cp "$FINAL_APK" "dist/"
           echo "apk_path=dist/$(basename "$FINAL_APK")" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare Debug APK Artifact
+      - name: Prepare Debug APK Artifact (when signing secrets not yet set)
         if: ${{ secrets.ANDROID_KEYSTORE_FILE == '' }}
         run: |
           RAW_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
@@ -145,14 +167,14 @@ jobs:
   release:
     name: Publish GitHub Release & Komi Store
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download signed APK artifact
+      - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
           name: tecno-clock-studio-apk
@@ -161,6 +183,8 @@ jobs:
       - name: Create Non-Draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.build.outputs.release_tag }}
+          name: Tecno Clock Studio ${{ needs.build.outputs.release_tag }}
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -174,9 +198,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if command -v komi >/dev/null 2>&1; then
-            komi publish --tag "${{ github.ref_name }}"
+            komi publish --tag "${{ needs.build.outputs.release_tag }}"
           elif command -v npx >/dev/null 2>&1; then
-            npx --yes komi-cli publish --tag "${{ github.ref_name }}" || true
+            npx --yes komi-cli publish --tag "${{ needs.build.outputs.release_tag }}" || true
           else
             echo "Komi CLI not preinstalled; public GitHub Release will be auto-indexed by Komi Store Search API."
           fi
