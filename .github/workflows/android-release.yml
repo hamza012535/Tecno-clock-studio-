@@ -94,18 +94,28 @@ jobs:
           echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Decode signing keystore from GitHub Secret
-        if: ${{ secrets.ANDROID_KEYSTORE_FILE != '' }}
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_FILE }}
+          STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_FILE }}" | base64 --decode > "${{ runner.temp }}/release.keystore"
-          echo "KEYSTORE_PATH=${{ runner.temp }}/release.keystore" >> "$GITHUB_ENV"
-          echo "STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
-          echo "KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 --decode > "${{ runner.temp }}/release.keystore"
+            echo "has_keystore=true" >> "$GITHUB_OUTPUT"
+            echo "KEYSTORE_PATH=${{ runner.temp }}/release.keystore" >> "$GITHUB_ENV"
+            echo "STORE_PASSWORD=${STORE_PASS}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${KEY_PASS}" >> "$GITHUB_ENV"
+          else
+            echo "has_keystore=false" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets not configured; falling back to debug APK build."
+          fi
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build Release APK
-        if: ${{ secrets.ANDROID_KEYSTORE_FILE != '' }}
+        if: steps.signing.outputs.has_keystore == 'true'
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
@@ -115,7 +125,7 @@ jobs:
           fi
 
       - name: Build Debug APK (Snapshot / Missing Keystore Fallback)
-        if: ${{ secrets.ANDROID_KEYSTORE_FILE == '' }}
+        if: steps.signing.outputs.has_keystore != 'true'
         run: |
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
@@ -126,7 +136,9 @@ jobs:
 
       - name: Sign & Verify Release APK with apksigner
         id: sign_apk
-        if: ${{ secrets.ANDROID_KEYSTORE_FILE != '' }}
+        if: steps.signing.outputs.has_keystore == 'true'
+        env:
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           BUILD_TOOLS_DIR=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
           RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
@@ -136,7 +148,7 @@ jobs:
           "$BUILD_TOOLS_DIR/apksigner" sign \
             --ks "${{ runner.temp }}/release.keystore" \
             --ks-pass "env:STORE_PASSWORD" \
-            --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
+            --ks-key-alias "${KEY_ALIAS:-upload}" \
             --key-pass "env:KEY_PASSWORD" \
             --out "$FINAL_APK" \
             "${{ runner.temp }}/aligned.apk"
@@ -147,7 +159,7 @@ jobs:
           echo "apk_path=dist/$(basename "$FINAL_APK")" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Debug APK Artifact (when signing secrets not yet set)
-        if: ${{ secrets.ANDROID_KEYSTORE_FILE == '' }}
+        if: steps.signing.outputs.has_keystore != 'true'
         run: |
           RAW_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
           mkdir -p dist
