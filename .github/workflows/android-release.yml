@@ -1,9 +1,9 @@
 name: Android Build & Komi Store Release
 
-# Required GitHub Repository Secrets for signed releases (see SECRETS.md):
+# Required GitHub Repository Secrets for signed release APKs (see SECRETS.md):
 # - ANDROID_KEYSTORE_FILE      : Base64-encoded .jks / .keystore signing file
 # - ANDROID_KEYSTORE_PASSWORD  : Keystore store password
-# - ANDROID_KEY_ALIAS          : Key alias inside the keystore (must be "upload")
+# - ANDROID_KEY_ALIAS          : Key alias inside the keystore (defaults to "upload")
 # - ANDROID_KEY_PASSWORD       : Key password for the alias
 
 on:
@@ -48,21 +48,24 @@ jobs:
           java-version: '21'
 
       - name: Set up Android SDK & Accept Licenses
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-36.1 build-tools;36.0.0'
 
       - name: Ensure Android SDK Licenses Accepted
         run: |
-          mkdir -p "$ANDROID_HOME/licenses"
-          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
-          printf "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          mkdir -p "$SDK_DIR/licenses"
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$SDK_DIR/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$SDK_DIR/licenses/android-sdk-preview-license"
 
       - name: Restore Debug Keystore for Gradle Debug Signing Config
         run: |
           if [ ! -f "debug.keystore" ]; then
             if [ -f "debug.keystore.base64" ]; then
-              base64 --decode debug.keystore.base64 > debug.keystore
+              tr -d ' \t\r\n' < debug.keystore.base64 | base64 --decode > debug.keystore
             else
-              keytool -genkeypair -v -keystore debug.keystore \
+              keytool -genkeypair -noprompt -keystore debug.keystore \
                 -storepass android -alias androiddebugkey -keypass android \
                 -keyalg RSA -keysize 2048 -validity 10000 \
                 -dname "CN=Android Debug,O=Android,C=US"
@@ -76,6 +79,7 @@ jobs:
             RAW_TAG="${GITHUB_REF_NAME}"
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.publish_release }}" == "true" ]]; then
             RAW_TAG="${{ inputs.tag_name }}"
+            RAW_TAG="${RAW_TAG:-v1.0.0}"
             [[ "$RAW_TAG" == v* ]] || RAW_TAG="v${RAW_TAG}"
           else
             RAW_TAG=""
@@ -108,9 +112,19 @@ jobs:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_FILE }}
           STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 --decode > "${{ runner.temp }}/release.keystore"
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASS" ] && [ -n "$KEY_PASS" ]; then
+            printf '%s' "$KEYSTORE_B64" | tr -d ' \t\r\n' | base64 --decode > "${{ runner.temp }}/release.keystore"
+            ALIAS_TO_USE="${KEY_ALIAS:-upload}"
+            if [ "$ALIAS_TO_USE" != "upload" ]; then
+              keytool -changealias \
+                -keystore "${{ runner.temp }}/release.keystore" \
+                -alias "$ALIAS_TO_USE" \
+                -destalias "upload" \
+                -storepass "$STORE_PASS" \
+                -keypass "$KEY_PASS"
+            fi
             echo "has_keystore=true" >> "$GITHUB_OUTPUT"
             echo "KEYSTORE_PATH=${{ runner.temp }}/release.keystore" >> "$GITHUB_ENV"
             echo "STORE_PASSWORD=${STORE_PASS}" >> "$GITHUB_ENV"
@@ -121,7 +135,7 @@ jobs:
           fi
 
       - name: Setup Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.3.1'
 
@@ -136,10 +150,9 @@ jobs:
       - name: Sign & Verify Release APK with apksigner
         id: sign_apk
         if: steps.signing.outputs.has_keystore == 'true'
-        env:
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          BUILD_TOOLS_DIR=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          BUILD_TOOLS_DIR=$(ls -d "$SDK_DIR"/build-tools/* | sort -V | tail -n 1)
           RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           FINAL_APK="${{ runner.temp }}/tecno-clock-studio-v${{ steps.version.outputs.version_name }}-release.apk"
 
@@ -147,7 +160,7 @@ jobs:
           "$BUILD_TOOLS_DIR/apksigner" sign \
             --ks "${{ runner.temp }}/release.keystore" \
             --ks-pass "env:STORE_PASSWORD" \
-            --ks-key-alias "${KEY_ALIAS:-upload}" \
+            --ks-key-alias "upload" \
             --key-pass "env:KEY_PASSWORD" \
             --out "$FINAL_APK" \
             "${{ runner.temp }}/aligned.apk"
@@ -165,7 +178,7 @@ jobs:
           cp "$RAW_APK" "dist/tecno-clock-studio-v${{ steps.version.outputs.version_name }}-debug.apk"
 
       - name: Upload APK Workflow Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tecno-clock-studio-apk
           path: dist/*.apk
@@ -186,13 +199,13 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download APK artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tecno-clock-studio-apk
           path: dist
 
       - name: Create Non-Draft GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.build.outputs.release_tag }}
           name: Tecno Clock Studio ${{ needs.build.outputs.release_tag }}
