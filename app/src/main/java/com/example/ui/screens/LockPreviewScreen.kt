@@ -243,11 +243,11 @@ fun LockPreviewScreen(
                             onLaunchSystemPicker = {
                                 runCatching {
                                     context.startActivity(
-                                        HiOsCompatibilityHelper.createWallpaperAndStyleIntent(context)
+                                        HiOsCompatibilityHelper.createLiveWallpaperIntent(context)
                                     )
                                 }.onFailure {
                                     viewModel.postMessage(
-                                        "Open Settings -> Wallpaper & style -> Lock screen clock to pick Tecno Clock Studio."
+                                        "Open Live Wallpapers and select Tecno Clock Studio, or enable Custom Lock Overlay below."
                                     )
                                 }
                             }
@@ -278,7 +278,71 @@ fun LockPreviewScreen(
                 }
             }
 
-            if (isActive) {
+            if (compat.isAndroid13Plus) {
+                FilledTonalButton(
+                    onClick = {
+                        if (config.customOverlayActive) {
+                            viewModel.disableCustomOverlay(context)
+                        } else {
+                            viewModel.enableCustomOverlay(
+                                context = context,
+                                onNeedOverlayPermission = {
+                                    runCatching {
+                                        context.startActivity(
+                                            HiOsCompatibilityHelper.createOverlayPermissionIntent(context)
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                    },
+                    colors = if (config.customOverlayActive) {
+                        ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    } else {
+                        ButtonDefaults.filledTonalButtonColors()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("android13_overlay_toggle_button")
+                ) {
+                    Icon(
+                        imageVector = if (config.customOverlayActive) {
+                            Icons.Rounded.PowerSettingsNew
+                        } else {
+                            Icons.Rounded.Layers
+                        },
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        if (config.customOverlayActive) {
+                            "Disable Custom Lock Screen Overlay"
+                        } else {
+                            "Enable Custom Lock Screen Overlay (HiOS Fallback)"
+                        }
+                    )
+                }
+
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "HiOS 13 Note: Tecno SystemUI ignores third-party ClockProviderPlugins unless OEM-signed. Tapping 'Apply to System Lock Screen' opens Tecno Clock Studio's Live Wallpaper (tap Set wallpaper -> Lock screen), or use Custom Lock Screen Overlay above.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(14.dp)
+                    )
+                }
+            } else if (isActive) {
                 FilledTonalButton(
                     onClick = { viewModel.disableLockScreen(context) },
                     colors = ButtonDefaults.filledTonalButtonColors(
@@ -295,13 +359,7 @@ fun LockPreviewScreen(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        if (compat.isAndroid13Plus) {
-                            "Unregister ClockProviderPlugin"
-                        } else {
-                            "Disable Custom Lock Screen Overlay"
-                        }
-                    )
+                    Text("Disable Custom Lock Screen Overlay")
                 }
             }
 
@@ -323,28 +381,41 @@ fun LockPreviewScreen(
                         style = MaterialTheme.typography.titleMedium
                     )
 
-                    if (!compat.isAndroid13Plus) {
-                        ReadinessRow(
-                            title = "Display Over Other Apps",
-                            granted = compat.canDrawOverlays,
-                            actionLabel = "Grant",
-                            onAction = {
-                                runCatching {
-                                    context.startActivity(
-                                        HiOsCompatibilityHelper.createOverlayPermissionIntent(context)
-                                    )
-                                }
+                    ReadinessRow(
+                        title = "Live Wallpaper Clock",
+                        granted = HiOsCompatibilityHelper.isLiveWallpaperActive(context),
+                        actionLabel = "Set",
+                        onAction = {
+                            runCatching {
+                                context.startActivity(
+                                    HiOsCompatibilityHelper.createLiveWallpaperIntent(context)
+                                )
                             }
-                        )
-                    } else {
+                        }
+                    )
+
+                    ReadinessRow(
+                        title = "Display Over Other Apps",
+                        granted = compat.canDrawOverlays,
+                        actionLabel = "Grant",
+                        onAction = {
+                            runCatching {
+                                context.startActivity(
+                                    HiOsCompatibilityHelper.createOverlayPermissionIntent(context)
+                                )
+                            }
+                        }
+                    )
+
+                    if (compat.isAndroid13Plus) {
                         ReadinessRow(
                             title = "ClockProviderPlugin Service",
                             granted = config.systemPluginRegistered,
-                            actionLabel = "Picker",
+                            actionLabel = "Open",
                             onAction = {
                                 runCatching {
                                     context.startActivity(
-                                        HiOsCompatibilityHelper.createWallpaperAndStyleIntent(context)
+                                        HiOsCompatibilityHelper.createLiveWallpaperIntent(context)
                                     )
                                 }
                             }

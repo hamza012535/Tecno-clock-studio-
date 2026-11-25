@@ -14,6 +14,7 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.example.data.DeviceCompatibilityInfo
 import com.example.systemui.ClockProviderPluginService
+import com.example.wallpaper.TecnoClockLiveWallpaperService
 
 object HiOsCompatibilityHelper {
 
@@ -103,11 +104,33 @@ object HiOsCompatibilityHelper {
         }
     }
 
+    fun createLiveWallpaperIntent(context: Context): Intent {
+        val component = ComponentName(context, TecnoClockLiveWallpaperService::class.java)
+        val directChangeIntent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
+            putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component)
+        }
+        val chooserIntent = Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER)
+
+        return listOf(directChangeIntent, chooserIntent, Intent(Settings.ACTION_DISPLAY_SETTINGS))
+            .firstOrNull { it.resolveActivity(context.packageManager) != null }
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            ?: Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    fun isLiveWallpaperActive(context: Context): Boolean {
+        return runCatching {
+            val wm = WallpaperManager.getInstance(context)
+            wm.wallpaperInfo?.serviceName == TecnoClockLiveWallpaperService::class.java.name
+        }.getOrDefault(false)
+    }
+
     fun createWallpaperAndStyleIntent(context: Context): Intent {
+        val component = ComponentName(context, TecnoClockLiveWallpaperService::class.java)
         val candidates = listOf(
-            Intent("com.android.wallpaper.PICK_WALLPAPER").setPackage("com.transsion.wallpaper"),
+            Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
+                putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component)
+            },
             Intent("com.android.wallpaper.PICK_WALLPAPER").setPackage("com.android.wallpaper"),
-            Intent(Intent.ACTION_SET_WALLPAPER),
             Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER),
             Intent(Settings.ACTION_DISPLAY_SETTINGS)
         )

@@ -85,6 +85,21 @@
                 android:value="com.example.systemui.TecnoClockProviderPlugin" />
         </service>
 
+        <!-- System Live Wallpaper Clock Engine (appears in Live Wallpapers & sets Lock Screen clock) -->
+        <service
+            android:name=".wallpaper.TecnoClockLiveWallpaperService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/clock_live_wallpaper" />
+        </service>
+
         <!-- Boot Receiver to restore LockScreenOverlayService after reboot on Android 6-12 -->
         <receiver
             android:name=".receiver.BootCompletedReceiver"

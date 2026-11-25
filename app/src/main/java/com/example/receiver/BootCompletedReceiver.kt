@@ -26,7 +26,6 @@ class BootCompletedReceiver : BroadcastReceiver() {
             return
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
         if (!Settings.canDrawOverlays(context)) return
 
         val pendingResult = goAsync()

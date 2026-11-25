@@ -284,23 +284,36 @@ class ClockStudioViewModel(application: Application) : AndroidViewModel(applicat
         if (compat.isAndroid13Plus) {
             HiOsCompatibilityHelper.setClockProviderPluginEnabled(context, true)
             viewModelScope.launch { repository.setSystemPluginRegistered(true) }
-            postMessage("ClockProviderPlugin registered. Select Tecno Clock Studio in Wallpaper & style.")
+            postMessage("Opening Tecno Clock Studio Live Wallpaper — tap 'Set wallpaper' -> 'Lock screen'.")
             onLaunchSystemPicker()
         } else {
-            if (!compat.canDrawOverlays) {
-                postMessage("Grant 'Display over other apps' permission to enable the custom lock screen.")
-                onNeedOverlayPermission()
-                return
-            }
-            LockScreenOverlayService.start(context)
-            viewModelScope.launch { repository.setCustomOverlayActive(true) }
-            postMessage("Custom lock screen overlay service is now active.")
+            enableCustomOverlay(context, onNeedOverlayPermission)
         }
+    }
+
+    fun enableCustomOverlay(
+        context: Context,
+        onNeedOverlayPermission: () -> Unit
+    ) {
+        val compat = HiOsCompatibilityHelper.inspectDevice(
+            context,
+            _uiState.value.compatibility.magazineGuideDismissed
+        )
+        _uiState.update { it.copy(compatibility = compat) }
+
+        if (!compat.canDrawOverlays) {
+            postMessage("Grant 'Display over other apps' permission to enable the custom lock screen overlay.")
+            onNeedOverlayPermission()
+            return
+        }
+        LockScreenOverlayService.start(context)
+        viewModelScope.launch { repository.setCustomOverlayActive(true) }
+        postMessage("Custom lock screen overlay active. Lock your screen to test it.")
     }
 
     fun disableLockScreen(context: Context) {
         val compat = _uiState.value.compatibility
-        if (compat.isAndroid13Plus) {
+        if (compat.isAndroid13Plus && !uiState.value.config.customOverlayActive) {
             HiOsCompatibilityHelper.setClockProviderPluginEnabled(context, false)
             viewModelScope.launch { repository.setSystemPluginRegistered(false) }
             postMessage("ClockProviderPlugin unregistered from SystemUI.")
@@ -309,6 +322,12 @@ class ClockStudioViewModel(application: Application) : AndroidViewModel(applicat
             viewModelScope.launch { repository.setCustomOverlayActive(false) }
             postMessage("Custom lock screen overlay stopped.")
         }
+    }
+
+    fun disableCustomOverlay(context: Context) {
+        LockScreenOverlayService.stop(context)
+        viewModelScope.launch { repository.setCustomOverlayActive(false) }
+        postMessage("Custom lock screen overlay stopped.")
     }
 
     fun postMessage(message: String) {
