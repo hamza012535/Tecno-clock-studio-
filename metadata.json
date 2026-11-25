@@ -1,0 +1,8 @@
+{
+  "name": "Tecno Clock Studio",
+  "description": "Advanced lock screen clock customization for Tecno HiOS smartphones (Android 6–13) with ClockProviderPlugin and adaptive overlay support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

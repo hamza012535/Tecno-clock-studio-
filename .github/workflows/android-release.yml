@@ -1,0 +1,182 @@
+name: Android Build & Komi Store Release
+
+# Required GitHub Repository Secrets (see SECRETS.md for details):
+# - ANDROID_KEYSTORE_FILE      : Base64-encoded .jks / .keystore signing file
+# - ANDROID_KEYSTORE_PASSWORD  : Keystore store password
+# - ANDROID_KEY_ALIAS          : Key alias inside the keystore (e.g. "upload")
+# - ANDROID_KEY_PASSWORD       : Key password for the alias
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Build type (debug or release)'
+        required: false
+        default: 'release'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Sign APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle packages and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle/wrapper/gradle-wrapper.properties', '**/gradle/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Compute versionCode and versionName from tag
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "${TAG%%-*}"
+            MAJOR=${MAJOR:-1}
+            MINOR=${MINOR:-0}
+            PATCH=${PATCH:-0}
+            VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+            VERSION_NAME="$TAG"
+          else
+            VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
+            VERSION_NAME="0.0.${GITHUB_RUN_NUMBER}-snapshot"
+          fi
+          echo "VERSION_CODE=${VERSION_CODE}" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=${VERSION_NAME}" >> "$GITHUB_ENV"
+          echo "version_code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Decode signing keystore from GitHub Secret
+        if: ${{ secrets.ANDROID_KEYSTORE_FILE != '' }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_FILE }}" | base64 --decode > "${{ runner.temp }}/release.keystore"
+          echo "KEYSTORE_PATH=${{ runner.temp }}/release.keystore" >> "$GITHUB_ENV"
+          echo "STORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Release APK
+        if: ${{ secrets.ANDROID_KEYSTORE_FILE != '' }}
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleRelease --no-daemon
+          else
+            gradle assembleRelease --no-daemon
+          fi
+
+      - name: Build Debug APK (Snapshot / PR / Missing Keystore Fallback)
+        if: ${{ secrets.ANDROID_KEYSTORE_FILE == '' }}
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --no-daemon
+          else
+            gradle assembleDebug --no-daemon
+          fi
+
+      - name: Sign & Verify Release APK with apksigner
+        id: sign_apk
+        if: ${{ secrets.ANDROID_KEYSTORE_FILE != '' }}
+        run: |
+          BUILD_TOOLS_DIR=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          FINAL_APK="${{ runner.temp }}/tecno-clock-studio-v${{ steps.version.outputs.version_name }}-release.apk"
+
+          "$BUILD_TOOLS_DIR/zipalign" -f -p 4 "$RAW_APK" "${{ runner.temp }}/aligned.apk"
+          "$BUILD_TOOLS_DIR/apksigner" sign \
+            --ks "${{ runner.temp }}/release.keystore" \
+            --ks-pass "env:STORE_PASSWORD" \
+            --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
+            --key-pass "env:KEY_PASSWORD" \
+            --out "$FINAL_APK" \
+            "${{ runner.temp }}/aligned.apk"
+
+          "$BUILD_TOOLS_DIR/apksigner" verify --verbose "$FINAL_APK"
+          mkdir -p dist
+          cp "$FINAL_APK" "dist/"
+          echo "apk_path=dist/$(basename "$FINAL_APK")" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Debug APK Artifact
+        if: ${{ secrets.ANDROID_KEYSTORE_FILE == '' }}
+        run: |
+          RAW_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          mkdir -p dist
+          cp "$RAW_APK" "dist/tecno-clock-studio-v${{ steps.version.outputs.version_name }}-debug.apk"
+
+      - name: Upload APK Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tecno-clock-studio-apk
+          path: dist/*.apk
+          retention-days: 30
+
+      - name: Cleanup temporary keystore
+        if: always()
+        run: rm -f "${{ runner.temp }}/release.keystore" "${{ runner.temp }}/aligned.apk"
+
+  release:
+    name: Publish GitHub Release & Komi Store
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download signed APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tecno-clock-studio-apk
+          path: dist
+
+      - name: Create Non-Draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: dist/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Register Release with Komi Store CLI
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if command -v komi >/dev/null 2>&1; then
+            komi publish --tag "${{ github.ref_name }}"
+          elif command -v npx >/dev/null 2>&1; then
+            npx --yes komi-cli publish --tag "${{ github.ref_name }}" || true
+          else
+            echo "Komi CLI not preinstalled; public GitHub Release will be auto-indexed by Komi Store Search API."
+          fi

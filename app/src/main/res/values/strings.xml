@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Tecno Clock Studio</string>
+    <string name="clock_plugin_service_label">Tecno Clock Studio Provider</string>
+    <string name="overlay_service_channel_name">Lock Screen Clock Service</string>
+    <string name="overlay_service_channel_desc">Keeps your custom lock screen clock active on Android 6–12 Tecno devices.</string>
+    <string name="overlay_notification_title">Tecno Clock Studio Active</string>
+    <string name="overlay_notification_text">Custom lock screen clock is ready when your screen wakes.</string>
+    <string name="nav_gallery">Studio</string>
+    <string name="nav_wallpapers">Wallpapers</string>
+    <string name="nav_preview">Preview</string>
+    <string name="nav_compatibility">HiOS &amp; AOD</string>
+    <string name="not_available_android_version">Not available on this Android version</string>
+</resources>
