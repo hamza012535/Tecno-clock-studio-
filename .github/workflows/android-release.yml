@@ -1,9 +1,9 @@
 name: Android Build & Komi Store Release
 
-# Required GitHub Repository Secrets (see SECRETS.md for details):
+# Required GitHub Repository Secrets for signed releases (see SECRETS.md):
 # - ANDROID_KEYSTORE_FILE      : Base64-encoded .jks / .keystore signing file
 # - ANDROID_KEYSTORE_PASSWORD  : Keystore store password
-# - ANDROID_KEY_ALIAS          : Key alias inside the keystore (use "upload")
+# - ANDROID_KEY_ALIAS          : Key alias inside the keystore (must be "upload")
 # - ANDROID_KEY_PASSWORD       : Key password for the alias
 
 on:
@@ -39,26 +39,35 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK & Accept Licenses
         uses: android-actions/setup-android@v3
 
-      - name: Cache Gradle packages and build cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle/wrapper/gradle-wrapper.properties', '**/gradle/libs.versions.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+      - name: Ensure Android SDK Licenses Accepted
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+
+      - name: Restore Debug Keystore for Gradle Debug Signing Config
+        run: |
+          if [ ! -f "debug.keystore" ]; then
+            if [ -f "debug.keystore.base64" ]; then
+              base64 --decode debug.keystore.base64 > debug.keystore
+            else
+              keytool -genkeypair -v -keystore debug.keystore \
+                -storepass android -alias androiddebugkey -keypass android \
+                -keyalg RSA -keysize 2048 -validity 10000 \
+                -dname "CN=Android Debug,O=Android,C=US"
+            fi
+          fi
 
       - name: Compute versionCode and versionName
         id: version
@@ -108,31 +117,21 @@ jobs:
             echo "KEY_PASSWORD=${KEY_PASS}" >> "$GITHUB_ENV"
           else
             echo "has_keystore=false" >> "$GITHUB_OUTPUT"
-            echo "Signing secrets not configured; falling back to debug APK build."
+            echo "Signing secrets not configured; building debug APK."
           fi
 
-      - name: Setup Gradle
+      - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
 
       - name: Build Release APK
         if: steps.signing.outputs.has_keystore == 'true'
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew assembleRelease --no-daemon
-          else
-            gradle assembleRelease --no-daemon
-          fi
+        run: gradle assembleRelease --no-daemon
 
       - name: Build Debug APK (Snapshot / Missing Keystore Fallback)
         if: steps.signing.outputs.has_keystore != 'true'
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --no-daemon
-          else
-            gradle assembleDebug --no-daemon
-          fi
+        run: gradle assembleDebug --no-daemon
 
       - name: Sign & Verify Release APK with apksigner
         id: sign_apk
@@ -158,7 +157,7 @@ jobs:
           cp "$FINAL_APK" "dist/"
           echo "apk_path=dist/$(basename "$FINAL_APK")" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare Debug APK Artifact (when signing secrets not yet set)
+      - name: Prepare Debug APK Artifact
         if: steps.signing.outputs.has_keystore != 'true'
         run: |
           RAW_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
@@ -172,7 +171,7 @@ jobs:
           path: dist/*.apk
           retention-days: 30
 
-      - name: Cleanup temporary keystore
+      - name: Cleanup temporary keystores
         if: always()
         run: rm -f "${{ runner.temp }}/release.keystore" "${{ runner.temp }}/aligned.apk"
 
@@ -184,7 +183,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download APK artifact
         uses: actions/download-artifact@v4
